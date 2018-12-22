@@ -1,14 +1,14 @@
-use std::collections::{HashMap, BinaryHeap};
+use std::collections::{HashMap, BinaryHeap, HashSet};
 use std::cmp::Ordering;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Equipment {
     Torch,
     Climbing,
     Neither
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Copy)]
 struct SearchState {
     pos: (u32, u32),
     time_spent: u32,
@@ -110,27 +110,152 @@ fn next_search(from: &SearchState, x_offset: i32, y_offset: i32, erosion_map: &H
 }
 
 
-fn find_fastest(erosion_map: &HashMap<(u32, u32), u32>, target: (u32, u32)) -> Option<SearchState> {
-    let mut to_search: BinaryHeap<SearchState> = BinaryHeap::new();
-    let mut cost_to_pos: HashMap<(u32, u32), u32> = HashMap::new();
+fn print_map(erosion_map: &HashMap<(u32, u32), u32>, cost_to_pos: &HashMap<(u32, u32), (u32, HashSet<Equipment>)>, target: (u32, u32)) {
+       for y in 0..=target.1+10 {
+        print!("{:03}", y);
+        for x in 0..=target.0+10 {
+            let here = cost_to_pos.get(&(x, y)).expect("calculated pos");
+            print!("  {:02}", here.0);
+            if (x, y) == target {
+                print!("X");
+            } else {
+                match erosion_map.get(&(x, y)).expect("erosion map") % 3 {
+                    0 => print!("."),
+                    1 => print!("~"),
+                    2 => print!("|"),
+                    other => panic!("Unknown {}", other),
+                };
+            }
+            for equi in here.1.iter() {
+                match equi {
+                    Equipment::Torch => print!("T"),
+                    Equipment::Climbing => print!("C"),
+                    Equipment::Neither => print!("N"),
+                }
+            }
+            for i in 0..2-here.1.len() {
+                print!(" ");
+            }
+        }
+        println!();
+    }
+}
+
+fn find_fastest_brute(erosion_map: &HashMap<(u32, u32), u32>, target: (u32, u32)) -> Option<SearchState> {
+    let mut to_search: Vec<SearchState> = Vec::new();
+    let mut cost_to_pos: HashMap<(u32, u32), (u32, HashSet<Equipment>)> = HashMap::new();
 
     to_search.push(SearchState::new((0, 0), 0, 0, Equipment::Torch));
     let mut investigated = 0;
+    let mut fastest_so_far: Option<SearchState> = None;
     while let Some(search) = to_search.pop() {
         // println!("Investigated {}, state: {:?}", investigated, search.pos);
         investigated += 1;
         // println!("searching {:?}\nto search: {:?}", search, to_search);
 
-        if let Some(cost_to_here) = cost_to_pos.get(&search.pos) {
-            if cost_to_here <= &search.time_spent {
+        if cost_to_pos.contains_key(&search.pos) {
+            let mut cost_to_here = cost_to_pos.get_mut(&search.pos).unwrap();
+            if cost_to_here.0 < search.time_spent {
                 continue;
+            } else if cost_to_here.0 == search.time_spent {
+                if cost_to_here.1.contains(&search.current_equiped) {
+                    continue;
+                }
+            } else {
+                cost_to_here.0 = search.time_spent;
+                cost_to_here.1.clear();
             }
+
+            cost_to_here.1.insert(search.current_equiped);
+        } else {
+            let mut cost_to_here = (search.time_spent, HashSet::new());
+            cost_to_here.1.insert(search.current_equiped);
+            cost_to_pos.insert(search.pos.clone(), cost_to_here);
         }
-        cost_to_pos.insert(search.pos.clone(), search.time_spent);
-        
+
         if search.pos == target {
             println!("Reached target with search state {:?}", search);
             // return Some(search);
+            if fastest_so_far.is_some() {
+                let fastest = fastest_so_far.unwrap();
+                if fastest.time_spent > search.time_spent {
+                    fastest_so_far = Some(search);
+                } else if search.current_equiped == Equipment::Torch && fastest.current_equiped != Equipment::Torch {
+                    if fastest.time_spent + 7 > search.time_spent {
+                        fastest_so_far = Some(search);
+                    }
+                }
+            } else {
+                fastest_so_far = Some(search);
+            }
+
+            continue;
+        }
+
+        // Search more
+        let mut states = next_search(&search, -1, 0, erosion_map);
+        states.extend(next_search(&search, 0, -1, erosion_map));
+        states.extend(next_search(&search, 1, 0, erosion_map));
+        states.extend(next_search(&search, 0, 1, erosion_map));
+        for state in states {
+            to_search.push(state);
+        }
+    }
+
+    // Print cost_map
+    print_map(&erosion_map, &cost_to_pos, target);
+
+    fastest_so_far
+}
+
+fn find_fastest(erosion_map: &HashMap<(u32, u32), u32>, target: (u32, u32)) -> Option<SearchState> {
+    let mut to_search: BinaryHeap<SearchState> = BinaryHeap::new();
+    let mut cost_to_pos: HashMap<(u32, u32), (u32, HashSet<Equipment>)> = HashMap::new();
+
+    to_search.push(SearchState::new((0, 0), 0, 0, Equipment::Torch));
+    let mut investigated = 0;
+    let mut fastest_so_far: Option<SearchState> = None;
+    while let Some(search) = to_search.pop() {
+        // println!("Investigated {}, state: {:?}", investigated, search.pos);
+        investigated += 1;
+        // println!("searching {:?}\nto search: {:?}", search, to_search);
+
+        if cost_to_pos.contains_key(&search.pos) {
+            let mut cost_to_here = cost_to_pos.get_mut(&search.pos).unwrap();
+            if cost_to_here.0 < search.time_spent {
+                continue;
+            } else if cost_to_here.0 == search.time_spent {
+                if cost_to_here.1.contains(&search.current_equiped) {
+                    continue;
+                }
+            } else {
+                cost_to_here.0 = search.time_spent;
+                cost_to_here.1.clear();
+            }
+
+            cost_to_here.1.insert(search.current_equiped);
+        } else {
+            let mut cost_to_here = (search.time_spent, HashSet::new());
+            cost_to_here.1.insert(search.current_equiped);
+            cost_to_pos.insert(search.pos.clone(), cost_to_here);
+        }
+
+        if search.pos == target {
+            println!("Reached target with search state {:?}", search);
+            // return Some(search);
+            if fastest_so_far.is_some() {
+                let fastest = fastest_so_far.unwrap();
+                if fastest.time_spent > search.time_spent {
+                    fastest_so_far = Some(search);
+                } else if search.current_equiped == Equipment::Torch && fastest.current_equiped != Equipment::Torch {
+                    if fastest.time_spent + 7 > search.time_spent {
+                        fastest_so_far = Some(search);
+                    }
+                }
+            } else {
+                fastest_so_far = Some(search);
+            }
+
             continue;
         }
 
@@ -146,21 +271,9 @@ fn find_fastest(erosion_map: &HashMap<(u32, u32), u32>, target: (u32, u32)) -> O
 
 
     // Print cost_map
-    for y in 0..=target.1 {
-        print!("{:03}", y);
-        for x in 0..=target.0 {
-            print!(" {:02}", cost_to_pos.get(&(x, y)).expect("calculated pos"));
-            match erosion_map.get(&(x, y)).expect("erosion map") % 3 {
-                0 => print!("."),
-                1 => print!("~"),
-                2 => print!("|"),
-                other => panic!("Unknown {}", other),
-            };
-        }
-        println!();
-    }
+    print_map(&erosion_map, &cost_to_pos, target);
 
-    None
+    fastest_so_far
 }
 
 
@@ -199,8 +312,9 @@ fn part1(depth: u32, target: (u32, u32)) {
 fn part2(depth: u32, target: (u32, u32)) {
     let mut risk_level = 0;
     let mut erosions = HashMap::new();
-    for y in 0..=target.1 + 100 {
-        for x in 0..=target.0 + 100 {       // 100 extra should be enough to find cheap way
+    let extra_padding = 12; // Expand area a bit to let us find ways outside as well
+    for y in 0..=target.1 + extra_padding {
+        for x in 0..=target.0 + extra_padding {       // 100 extra should be enough to find cheap way
             let geo_index = geo_index(x, y, target, &erosions);
             let erosion = erosion_level(depth, geo_index);
             risk_level += erosion % 3;
@@ -208,9 +322,10 @@ fn part2(depth: u32, target: (u32, u32)) {
         }
     }
 
-    let fastest = find_fastest(&erosions, target);
+    let fastest = find_fastest_brute(&erosions, target).expect("fastest not found");
 
     println!("Part2: Risklevel {}, fastest {:?}", risk_level, fastest);
+    println!("Part2: final time to target: {}", if fastest.current_equiped == Equipment::Torch { fastest.time_spent } else { fastest.time_spent + 7});
 }
 
 fn main() {
@@ -218,10 +333,12 @@ fn main() {
     let depth = 510;
     let target = (10, 10);
     // Input
-    // let depth = 9171;
-    // let target = (7, 721);
+    let depth = 9171;
+    let target = (7, 721);
 
+    // let depth = 9171;
+    // let target = (10, 45);
 
     part1(depth, target);
-    part2(depth, target);
+    part2(depth, target);       // 992 too high
 }
